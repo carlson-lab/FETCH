@@ -2,7 +2,7 @@
 Pipeline for processing flow cytometry .fcs files to get FETCH score
 
 ## Installation: 
-`conda env create -n FETCH --file FETCH_env.yml python=3.8.8`
+`conda env create -n FETCH --file FETCH_env.yml`
 
 `conda activate FETCH`
 
