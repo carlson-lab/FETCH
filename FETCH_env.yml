@@ -2,7 +2,7 @@ name: FETCH
 dependencies:
   - pip=21.0.1
   - python=3.8.8
-  - matplotlib==3.3.3
+  - matplotlib==3.3.4
   - pip:
     - scipy==1.9.1
     - flowkit==1.0.1
