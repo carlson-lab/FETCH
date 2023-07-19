@@ -518,8 +518,11 @@ def FETCH_analysis(inputlist):
     gs_results = g_strat.gate_sample(sample)
     a = gs_results.get_gate_membership('And1')
     c = Y[a]
-    if len(sample.channels) == 6:
+    fluorescent_chan_names = list(sample.channels['pns'].unique())
+    if len(sample.channels) == 6 and 'RFP670' in fluorescent_chan_names:
         return z(samplename, Z, a, vertices1, vertices2, dest, sample, 'RFP670', 'mEmerald', '5-A', '1-A')
+    elif len(sample.channels) == 6 and 'mApple' in fluorescent_chan_names:
+        return z(samplename, Z, a, vertices1, vertices2, dest, sample, 'mApple', 'mEmerald', 'PE-A', 'FITC-A')
     elif len(sample.channels) == 5:
         return z(samplename, Z, a, vertices1, vertices2, dest, sample, 'mCherry', 'mEmerald', 'PE-Texas Red-A', 'FITC-A')
     elif len(sample.channels) == 7:
@@ -539,7 +542,10 @@ def summarize(outputs, fcs_folder, project_name, skip_renaming):
     dataf['Dubious?'] = dataf.apply(lambda row : 'yes' if ((row['r_g'] >= 2) or (row['r_g'] <= 0.5) or (row['n_tot'] < 500) or np.isnan(row['r_g'])) else 'no',
                         axis=1)
     dataf = dataf.drop(['r_g'], axis=1)
-    dataf["File"] = dataf["File"].apply(lambda x: x.rsplit('_')[2] + '_' + x.rsplit('_')[0] + '_' + x.rsplit('_')[1] + '_' + x.rsplit('_')[3] if x not in skip_renaming else x)
+    try:
+        dataf["File"] = dataf["File"].apply(lambda x: x.rsplit('_')[2] + '_' + x.rsplit('_')[0] + '_' + x.rsplit('_')[1] + '_' + x.rsplit('_')[3] if x not in skip_renaming else x)
+    except IndexError:
+        pass
     dataf = dataf.sort_values(by='File')
     dataf['Numbername'] = [i for i in range(dataf.shape[0])]
     sns.set(font_scale=2)
