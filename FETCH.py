@@ -5,6 +5,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.pyplot import figure
 import scipy
+import warnings
 
 def _centered(arr, newsize):
     # Return the center newsize portion of the array.
@@ -62,6 +63,18 @@ def parse_arguments():
         default='',
         help="This script expects fcs files to be formatted as 'FC114_A1_A01_001.fcs'; if just a few files are not formatted like that, pass them as arguments in this function to avoid errors; otherwise edit summarize function too parse your filenames correctly", nargs='*')
 
+    ap.add_argument(
+        "-l", "--legacy_gate1",
+        default="False",
+        help ="An optional argument that sets a more narrow first gate for replicability of past analysis",
+        type=str )
+    
+    ap.add_argument(
+        "-n", "--negative_control",
+        default="None",
+        help ="An optional argument: draws the third gate against a known negative control instead of automatic gating",
+        type=str )
+    
     return ap.parse_args()
 
 #this function writes gatefiles that can be opened in flowjo specifically
@@ -206,7 +219,7 @@ def fitEllipse(x,y):
     b=np.sqrt(abs(up/down2))
     ell=Ellipse((cx,cy),a*2.,b*2.,angle=angle)
     ell_coord=ell.get_verts()
-    return ell_coord
+    return [ell_coord, cx, cy, a*2, b*2, angle]
 
 #kde = kernel density estimation; matching density to color    
 def make_kde(points):
@@ -254,19 +267,21 @@ def bestBandwidth(data, minBandwidth = 0.1, maxBandwidth = 2, nb_bandwidths = 30
 
 
 #possibly for defining the last gate
-def z(samplename, Z, a, vertices1, vertices2, dest, sample, fluorophore1, fluorophore2, channame1, channame2):
+def z(samplename, Z, a, vertices1, vertices2, dest, sample, fluorophore1, fluorophore2, channame1, channame2, neg_cntrl):
     fluorophores = fluorophore1 + '_' + fluorophore2
     filename = join(dest, 'gates.xml')
     d = Z[a]
     if len(d) == 0:
-        return [samplename, 0, None, 0]
+        warnings.warn("No sample for last gate")
+        return [samplename, 0, None, 0, []]
     new_Z = np.array([Z[a][:, 0] + abs(min(Z[a][:, 0])) + 1, Z[a][:, 1] + abs(min(Z[a][:, 1])) + 1])
     new_Z= new_Z.T
     Z_log = np.log(new_Z) 
     try:
         [alls, figure_centre, x, y] = make_kde(Z_log)
     except ValueError:
-        return [samplename, 0, None, 0]
+        warnings.warn("Can't make kde")
+        return [samplename, 0, None, 0, []]
     max_area = 0
     best_top_point = None
     best_right_point = None
@@ -276,51 +291,66 @@ def z(samplename, Z, a, vertices1, vertices2, dest, sample, fluorophore1, fluoro
     kde_model = KernelDensity(kernel='gaussian', bandwidth=cv_bandwidth).fit(xy.T)
     kde = np.exp(kde_model.score_samples(xy.T))
     idx = kde.argsort()
-    
     candidates = []
-    for j in range(len(alls)):
-        for ii, seg in enumerate(alls[j]):
-            p = Path(seg) # make a polygon
-            grid = p.contains_points(xy.T)
-            mean_kde = np.mean(kde[grid])
-            top_point_log = max(seg[:,1])
-            right_point_log = max(seg[:,0])
-            top_point = np.exp(top_point_log) - abs(min(Z[a][:, 1])) - 1
-            right_point = np.exp(right_point_log) - abs(min(Z[a][:, 0])) - 1
-            transfected_cells_x = right_point >= 500
-            transfected_cells_y = top_point >= 500
-            plt.plot(seg[:,0], seg[:,1], '.-')
-            if transfected_cells_x or transfected_cells_y:
-                continue 
-            area = 0.5*np.abs(np.dot(seg[:,0],np.roll(seg[:,1],1))-np.dot(seg[:,1],np.roll(seg[:,0],1)))    
-            if area > max_area:
-                candidates.append([area, kde[grid], top_point, right_point])
-    largest_cand = [0]
-    if len(candidates) == 0:
-        print("Pipeline error on this file")
-        return [samplename, 0, None, 0]
-    for cand in candidates:
-        if cand[0] > largest_cand[0]:
-            largest_cand = cand
-    h_plt = plt.hist(largest_cand[1], bins=100)
-    bin_count = h_plt[0]
-    cutoff = h_plt[1]        
-    quantile_cutoff = np.quantile(cutoff, 0.60)
-    
-    for cand in candidates:
-        if np.mean(cand[1]) < quantile_cutoff:
-                continue
-        if cand[0] > max_area:
-                max_area = cand[0]
-                best_top_point = cand[2]
-                best_right_point = cand[3]
-      
-    
+    if neg_cntrl:
+        if samplename.rsplit('.fcs') == neg_cntrl[0]:
+            best_top_point = max(d[:, 1])
+            best_right_point = max(d[:, 0])
+
+        else:
+            best_top_point, best_right_point = neg_cntrl[1]
+    else:
+        for j in range(len(alls)):
+            for ii, seg in enumerate(alls[j]):
+                p = Path(seg) # make a polygon
+                grid = p.contains_points(xy.T)
+                mean_kde = np.mean(kde[grid])
+                top_point_log = max(seg[:,1])
+                right_point_log = max(seg[:,0])
+                top_point = np.exp(top_point_log) - abs(min(Z[a][:, 1])) - 1
+                right_point = np.exp(right_point_log) - abs(min(Z[a][:, 0])) - 1
+                transfected_cells_x = right_point >= 500
+                transfected_cells_y = top_point >= 500
+                plt.plot(seg[:,0], seg[:,1], '.-')
+                if transfected_cells_x or transfected_cells_y:
+                    continue 
+                area = 0.5*np.abs(np.dot(seg[:,0],np.roll(seg[:,1],1))-np.dot(seg[:,1],np.roll(seg[:,0],1)))    
+                if area > max_area:
+                    candidates.append([area, kde[grid], top_point, right_point])
+        largest_cand = [0]
+        if len(candidates) == 0:
+            warnings.warn("Pipeline error on this file")
+            return [samplename, 0, None, 0]
+        for cand in candidates:
+            if cand[0] > largest_cand[0]:
+                largest_cand = cand
+        h_plt = plt.hist(largest_cand[1], bins=100)
+        bin_count = h_plt[0]
+        cutoff = h_plt[1]        
+        quantile_cutoff = np.quantile(cutoff, 0.60)
+        for cand in candidates:
+            if np.mean(cand[1]) < quantile_cutoff:
+                    continue
+            if cand[0] > max_area:
+                    max_area = cand[0]
+                    best_top_point = cand[2]
+                    best_right_point = cand[3]
+        
+        
     boundaries = [best_right_point, best_top_point]
     if len(sample.channels) == 7:
         gname = join(dest, fluorophores + '_gates.xml')
     else:
         gname = join(dest, 'gates.xml')
+    if neg_cntrl[0] != "None":
+        if neg_cntrl[0] == samplename.rsplit('.fcs')[0]:
+            best_right_point = max(d[:, 0]) + 10
+            best_top_point = max(d[:, 1]) + 10
+            boundaries = [best_right_point, best_top_point]
+        else: 
+            best_right_point, best_top_point = neg_cntrl[1]
+            boundaries = [best_right_point, best_top_point]
+
     gate_writer(vertices1, vertices2, boundaries, gname, channame1, channame2, fluorophore1, fluorophore2)
     g_strat = fk.parse_gating_xml(gname)    
     gs_results = g_strat.gate_sample(sample)
@@ -347,14 +377,24 @@ def z(samplename, Z, a, vertices1, vertices2, dest, sample, fluorophore1, fluoro
     red = list(df.loc[df['gate_name'] == 'And4' + fluorophore1]['count'])[0]
     untransfected = list(df.loc[df['gate_name'] == 'And2Untransfected']['count'])[0]
     #this is a contingency for blank samples
-    if double_positives + green + red == 0:
-        return [samplename, 0, None, 0]
+    if neg_cntrl[0] == "None" and double_positives + green + red == 0:
+        warnings.warn("Only untransfected cells found")
+        return [samplename, 0, None, 0, [untransfected, red, green, double_positives]]
     #defining the FETCH  score
-    FETCH_score = double_positives/(double_positives + green + red)
+    try:
+        FETCH_score = double_positives/(double_positives + green + red)
+    except ZeroDivisionError:
+        FETCH_score = 0
+
     #another contingency
-    if FETCH_score > 0.90 or untransfected/(double_positives + green + red + untransfected) > 0.90:
-        return [samplename, 0, None, double_positives + green + red + untransfected]
-    r_g = red/green
+    if  neg_cntrl[0] == "None" and (FETCH_score > 0.90 or untransfected/(double_positives + green + red + untransfected) > 0.90):
+        warnings.warn("FETCH score unreasonably high -- something went wrong")
+        return [samplename, 0, None, double_positives + green + red + untransfected, [untransfected, red, green, double_positives]]
+    try:
+        r_g = red/green
+    except ZeroDivisionError:
+        warnings.warn("Can't calculate the proportion of red to green: there is no green cells")
+        r_g = 0
     ax = plt.gca()
     minor = matplotlib.ticker.LogLocator(base = 10.0, subs = np.arange(1.0, 10.0) * 0.1, numticks = 10)
     ax.yaxis.set_minor_locator(minor)
@@ -381,33 +421,66 @@ def z(samplename, Z, a, vertices1, vertices2, dest, sample, fluorophore1, fluoro
     #clear axes and figure to plot next
     plt.cla()
     plt.clf()
-    return [samplename, FETCH_score, r_g, double_positives + green + red + untransfected]
+    return [samplename, FETCH_score, r_g, double_positives + green + red + untransfected, boundaries, [untransfected, red, green, double_positives]]
 
  #Above, the helper files were added, Below here, the actual processing, central functions are listed
 def FETCH_analysis(inputlist):
     plt.close('all')
-    fcs_path, samplename, dest = inputlist
+    fcs_path, samplename, dest, leg_g1, neg_cntrl = inputlist
     #make a directly for an FCS file and use flowkit to parse that, to get variable called sample
     os.mkdir(dest)
     plt.grid(visible=None)
     sample = fk.Sample(fcs_path)
-    arr1 = sample.get_channel_events(0, source='raw', subsample=False) #FSC-A
-    arr2 = sample.get_channel_events(2, source='raw', subsample=False) #SSC-A
-    arr3 = sample.get_channel_events(1, source='raw', subsample=False) #FSC-H
-    arr4 = sample.get_channel_events(3, source='raw', subsample=False) #1-A or FITC-A(Emerald)
-    if len(sample.channels) == 6:
-        arr5 = sample.get_channel_events(4, source='raw', subsample=False) #5-A(RFP670)
-        Z = np.stack((arr4, arr5), axis=1)
-    elif len(sample.channels) == 5:
-        arr5 = sample.get_channel_events(4, source='raw', subsample=False) #PE-Texas Red-A(mCherry)
-        Z = np.stack((arr4, arr5), axis=1)
-    elif len(sample.channels) == 7:
-        arr5 = sample.get_channel_events(4, source='raw', subsample=False) #PE-A (mApple)
-        arr6 = sample.get_channel_events(5, source='raw', subsample=False) #APC-A (RFP670)
+    
+
+    fsc_a_loc = sample.channels.loc[sample.channels['pnn'].str.contains('FSC-A')].index[0]
+    ssc_a_loc = sample.channels.loc[sample.channels['pnn'].str.contains('SSC-A')].index[0]
+    fsc_h_loc = sample.channels.loc[sample.channels['pnn'].str.contains('FSC-H')].index[0]
+    remaining_rows = [r for r in range(sample.channels.shape[0]) if r not in [fsc_a_loc, ssc_a_loc, fsc_h_loc]] 
+    other_chans = list(sample.channels.iloc[remaining_rows]['pnn'])
+    other_chans = [chn for chn in other_chans if 'Time' not in chn]
+    fluor_chan_n = len(other_chans)
+
+    arr1 = sample.get_channel_events(fsc_a_loc, source='raw', subsample=False) #FSC-A
+    arr2 = sample.get_channel_events(ssc_a_loc, source='raw', subsample=False) #SSC-A
+    arr3 = sample.get_channel_events(fsc_h_loc, source='raw', subsample=False) #FSC-H
+
+    if 'FITC' in other_chans or '1-A' in other_chans: #always have green along x axis
+        if 'FITC' in other_chans:
+            grn_ch_name = 'FITC'
+        else:
+            grn_ch_name = '1-A'
+        x_ax_index = [chn for chn in other_chans if grn_ch_name in chn][0]
+        x_chan_name = sample.channels.loc[sample.channels['pnn'].str.contains(grn_ch_name)]['pns']
+        green_loc = sample.channels.loc[sample.channels['pnn'].str.contains(grn_ch_name)].index[0]
+        other_chans = [chn for chn in other_chans if grn_ch_name not in chn]
+        arr4 = sample.get_channel_events(green_loc, source='raw', subsample=False) #1-A or FITC-A(Emerald)
+        
+    else:
+        x_ax_index = other_chans[0]
+        x_chan_name = list(sample.channels.loc[sample.channels['pnn'].str.contains(other_chans[0])]['pns'])[0]
+        first_loc = sample.channels.loc[sample.channels['pnn'].str.contains(other_chans[0])].index[0]
+        other_chans = [chn for chn in other_chans if other_chans[0] not in chn]
+        arr4 = sample.get_channel_events(first_loc, source='raw', subsample=False) #1-A or FITC-A(Emerald)
+
+    if x_chan_name == '':
+        x_chan_name = x_ax_index
+    second_loc = sample.channels.loc[sample.channels['pnn'].str.contains(other_chans[0])].index[0]
+    y_ax_index = other_chans[0]
+    y_chan_name = list(sample.channels.loc[sample.channels['pnn'].str.contains(other_chans[0])]['pns'])[0]
+    if y_chan_name == '':
+        y_chan_name = y_ax_index
+    arr5 = sample.get_channel_events(second_loc, source='raw', subsample=False) #5-A(RFP670), PE-Texas Red-A(mCherry), PE-A (mApple), or any other color
+        
+    Z = np.stack((arr4, arr5), axis=1)
+
+    if fluor_chan_n == 3: # have 3 fluorescent channels
+        third_loc = sample.channels.loc[sample.channels['pnn'].str.contains(other_chans[1])].index[0]
+        arr6 = sample.get_channel_events(third_loc, source='raw', subsample=False) 
         Z_ea = np.stack((arr4, arr5), axis=1)
         Z_er = np.stack((arr4, arr6), axis=1)
         Z_ar = np.stack((arr5, arr6), axis=1)
-    else:
+    elif fluor_chan_n > 3:
         raise Exception("Something is wrong with your channel number")
         #arr = array, plot.. x = 1st gate and y = 2nd gate
     X = np.stack((arr2, arr1), axis=1)
@@ -449,7 +522,39 @@ def FETCH_analysis(inputlist):
                 smallest_area = item[1]
                 best_seg = alls[item[0]][item[2]]
     #fitting an elipse to our identified best fit contour
-    vertices1 = np.round(fitEllipse(best_seg[:,0],best_seg[:,1]), 0) 
+    ell_coord, el_cx, el_cy, el_w, el_h, el_angle = fitEllipse(best_seg[:,0],best_seg[:,1])
+    vertices1 = np.round(ell_coord, 0) 
+    if not leg_g1: #Keep the definition of vertices1 only if replicating old data
+        # Step 1: Filter points whose y values are within 100 of the target value
+        filtered_points = X[np.abs(X[:, 0] - min(vertices1[:, 0])) <= 100]
+
+        # # Step 2: Sort the filtered points based on x values
+        sorted_points = filtered_points[np.argsort(filtered_points[:, 1])]
+
+        # # Step 3: Select the point with the smallest x value from the sorted array
+        left_low = sorted_points[0]
+        left_low = [left_low[1], left_low[0]]
+
+        # # Step 4: Filter points whose y values are at least 10 more than the left_low's
+        filtered_points2 = X[(X[:, 0] > (left_low[1] + 10)) & (X[:, 1] > left_low[0])]
+
+        # # Step5: get the left_mid point to get the slope of the left bound
+        left_mid = filtered_points2[np.argsort(filtered_points2[:, 1])][0]
+        left_mid = [left_mid[1], left_mid[0]]
+        slope = (left_mid[1] - left_low[1]) / (left_mid[0] - left_low[0])
+        y_intercept = left_low[1] - slope * left_low[0]
+        top_left = [(max(X[:, 0]) - 10 - y_intercept) / slope, max(X[:, 0]) -10]
+        right_top = [max(X[:, 1]) -10, max(X[:, 0]) -10]
+
+        # #Step 6: get the line parallel to the ellipse's angle and perpendicular to its second principal component to define left bound
+        rad90 = np.radians(90)
+        ell_side_point = [el_cx + el_h/2*np.sin(np.radians(el_angle))/np.sin(rad90), el_cy - el_h/2*np.sin(np.radians(90 - el_angle))/np.sin(rad90)]
+        slope_right = np.tan(np.radians(el_angle))
+        y_intercept_right = ell_side_point[1] - slope_right * ell_side_point[0]
+        mid_right = [max(X[:, 1]) -10, slope_right*(max(X[:, 1]) -10) + y_intercept_right]
+        low_right = [(left_low[1] - y_intercept_right)/slope_right, left_low[1]] 
+        vertices1 = np.round([left_low, top_left, right_top, mid_right, low_right], 0)
+
     #generates the .xml file 
     filename = join(dest, 'gates.xml')
     gate_writer(vertices1, None, None, filename)
@@ -519,22 +624,18 @@ def FETCH_analysis(inputlist):
     a = gs_results.get_gate_membership('And1')
     c = Y[a]
     fluorescent_chan_names = list(sample.channels['pns'].unique())
-    if len(sample.channels) == 6 and 'RFP670' in fluorescent_chan_names:
-        return z(samplename, Z, a, vertices1, vertices2, dest, sample, 'RFP670', 'mEmerald', '5-A', '1-A')
-    elif len(sample.channels) == 6 and 'mApple' in fluorescent_chan_names:
-        return z(samplename, Z, a, vertices1, vertices2, dest, sample, 'mApple', 'mEmerald', 'PE-A', 'FITC-A')
-    elif len(sample.channels) == 5:
-        return z(samplename, Z, a, vertices1, vertices2, dest, sample, 'mCherry', 'mEmerald', 'PE-Texas Red-A', 'FITC-A')
+    if fluor_chan_n == 2:
+        return z(samplename, Z, a, vertices1, vertices2, dest, sample, y_chan_name, x_chan_name, y_ax_index, x_ax_index, neg_cntrl)
     elif len(sample.channels) == 7:
-        first = z(samplename, Z_ea, a, vertices1, vertices2, dest, sample, 'mApple', 'mEmerald', 'PE-A', 'FITC-A')
-        second = z(samplename, Z_er, a, vertices1, vertices2, dest, sample, 'RFP670', 'Emerald', 'APC-A', 'FITC-A')
-        third = z(samplename, Z_ar, a, vertices1, vertices2, dest, sample, 'RFP670', 'mApple', 'APC-A', 'PE-A')
+        first = z(samplename, Z_ea, a, vertices1, vertices2, dest, sample, y_chan_name, x_chan_name, y_ax_index, x_ax_index, neg_cntrl)
+        second = z(samplename, Z_er, a, vertices1, vertices2, dest, sample, 'RFP670', 'Emerald', 'APC-A', 'FITC-A', neg_cntrl)
+        third = z(samplename, Z_ar, a, vertices1, vertices2, dest, sample, 'RFP670', 'mApple', 'APC-A', 'PE-A', neg_cntrl)
         return [first, second, third]
 
 
 def summarize(outputs, fcs_folder, project_name, skip_renaming):
     dataf = pd.DataFrame(outputs)
-    dataf = dataf.rename({0: "File", 1: "FETCH score", 2 : "r_g", 3:"n_tot"}, axis='columns')
+    dataf = dataf.rename({0: "File", 1: "FETCH score", 2 : "r_g", 3:"n_tot", 4: "3rd_gate_coord", 5:"raw_counts"}, axis='columns')
     dataf['Dubious?'] = [False for i in range(dataf.shape[0])]
     dataf['FETCH score'] = dataf['FETCH score'].astype(float)
     dataf['r_g'] = dataf['r_g'].astype(float)
@@ -549,7 +650,6 @@ def summarize(outputs, fcs_folder, project_name, skip_renaming):
     dataf = dataf.sort_values(by='File')
     dataf['Numbername'] = [i for i in range(dataf.shape[0])]
     sns.set(font_scale=2)
-
     figure(num=None, figsize=(32, 16), dpi=80, facecolor='w', edgecolor='k')
     colors = [(0, 0, 0) if dataf["Dubious?"].iloc[i] == 'no' else (1, 0, 0) for i in range(dataf["File"].unique().shape[0])]
 
@@ -576,18 +676,28 @@ def summarize(outputs, fcs_folder, project_name, skip_renaming):
 def main(args):
     fcs_folder = args.folder
     project_name = args.project
+    leg_g1 = not(args.legacy_gate1 == 'False') #for replicability of past analysis, add an optional argument that sets a more narrow first gate
     skip_renaming = args.skip_renaming
     if skip_renaming == '':
         skip_renaming = []
+    negative_control = args.negative_control
     plt.cla()
     plt.clf()
     plt.close()
     plt.style.use('default')
-    inpts = [[join(fcs_folder, samplename), samplename, join(fcs_folder, samplename.rsplit('.')[0])] if (samplename != '.DS_Store' and not os.path.isdir(join(fcs_folder, samplename.rsplit('.')[0]))) else None for samplename in os.listdir(fcs_folder)]
+    inpts = [[join(fcs_folder, samplename), samplename, join(fcs_folder, samplename.rsplit('.')[0]), leg_g1, [negative_control, [None, None]]] if (samplename != '.DS_Store' and not os.path.isdir(join(fcs_folder, samplename.rsplit('.')[0]))) else None for samplename in os.listdir(fcs_folder)]
     inpts = list(filter(None, inpts))
     outstuff = []
+    if negative_control != "None":
+        for i_pos, el in enumerate(inpts):
+            if el[1].rsplit('.fcs')[0] == negative_control:
+                neg_outpt = FETCH_analysis(inpts.pop(i_pos))
+                outstuff.append(neg_outpt)
+                inpts = [[el[0], el[1], el[2], el[3], [el[4], neg_outpt[4]]] for el in inpts]
+                break
+    
     for inp in inpts:
-        outstuff.append(FETCH_analysis(inp)) 
+        outstuff.append(FETCH_analysis(inp))
     outputs = np.array(outstuff)
     #draws the aggregate plot figure and table comparing FETCH scores
     summarize(outputs, fcs_folder, project_name, skip_renaming)
