@@ -139,11 +139,11 @@ def gate_writer(vertices1, vertices2, boundaries, filename, channame1=None, chan
             '            <gating:position gating:divider_ref="A" gating:location="' + str(boundaries[1] + 1) + '" />',
             '            <gating:position gating:divider_ref="B" gating:location="' + str(boundaries[0] + 1) + '" />',
             '        </gating:Quadrant>',
-            '        <gating:Quadrant gating:id="' + fluorophore1 + '">',
+            '        <gating:Quadrant gating:id="fluorophorea">',
             '            <gating:position gating:divider_ref="A" gating:location="' + str(boundaries[1] + 1) + '" />',
             '            <gating:position gating:divider_ref="B" gating:location="' + str(boundaries[0] - 1) + '" />',
             '        </gating:Quadrant>',
-            '        <gating:Quadrant gating:id="' + fluorophore2 + '">',
+            '        <gating:Quadrant gating:id="fluorophoreb">',
             '            <gating:position gating:divider_ref="A" gating:location="' + str(boundaries[1] - 1) + '" />',
             '            <gating:position gating:divider_ref="B" gating:location="' + str(boundaries[0] + 1) + '" />',
             '        </gating:Quadrant>',
@@ -166,22 +166,22 @@ def gate_writer(vertices1, vertices2, boundaries, filename, channame1=None, chan
             '            <gating:gateReference gating:ref="Double-Positive" />',
             '        </gating:and>',
             '    </gating:BooleanGate>']
-            fourth_and_gate = ['    <gating:BooleanGate gating:id="And4' + fluorophore1 + '">',
+            fourth_and_gate = ['    <gating:BooleanGate gating:id="And4fluorophorea">',
             '        <data-type:custom_info>',
-            '            Only keep results satisfying both Polygon gates and ' + fluorophore1,
+            '            Only keep results satisfying both Polygon gates and fluorophorea',
             '        </data-type:custom_info>',
             '        <gating:and>',
             '            <gating:gateReference gating:ref="And1" />',
-            '            <gating:gateReference gating:ref="' + fluorophore1 + '" />',
+            '            <gating:gateReference gating:ref="fluorophorea" />',
             '        </gating:and>',
             '    </gating:BooleanGate>']
-            fifth_and_gate = ['    <gating:BooleanGate gating:id="And5' + fluorophore2 + '">',
+            fifth_and_gate = ['    <gating:BooleanGate gating:id="And5fluorophoreb">',
             '        <data-type:custom_info>',
-            '            Only keep results satisfying both Polygon gates and ' + fluorophore2,
+            '            Only keep results satisfying both Polygon gates and fluorophoreb',
             '        </data-type:custom_info>',
             '        <gating:and>',
             '            <gating:gateReference gating:ref="And1" />',
-            '            <gating:gateReference gating:ref="' + fluorophore2 + '" />',
+            '            <gating:gateReference gating:ref="fluorophoreb" />',
             '        </gating:and>',
             '    </gating:BooleanGate>']
             gate_text = gate_text + polygon1 + polygon2 + and_gate + quadrants + \
@@ -292,7 +292,7 @@ def z(samplename, Z, a, vertices1, vertices2, dest, sample, fluorophore1, fluoro
     kde = np.exp(kde_model.score_samples(xy.T))
     idx = kde.argsort()
     candidates = []
-    if neg_cntrl:
+    if neg_cntrl[0] != "None":
         if samplename.rsplit('.fcs') == neg_cntrl[0]:
             best_top_point = max(d[:, 1])
             best_right_point = max(d[:, 0])
@@ -373,8 +373,8 @@ def z(samplename, Z, a, vertices1, vertices2, dest, sample, fluorophore1, fluoro
     df = df.reset_index()
     #numbers of each individual quadrant
     double_positives = list(df.loc[df['gate_name'] == 'And3DoublePositive']['count'])[0]
-    green = list(df.loc[df['gate_name'] == 'And5' + fluorophore2]['count'])[0]
-    red = list(df.loc[df['gate_name'] == 'And4' + fluorophore1]['count'])[0]
+    green = list(df.loc[df['gate_name'] == 'And5fluorophoreb']['count'])[0]
+    red = list(df.loc[df['gate_name'] == 'And4fluorophorea']['count'])[0]
     untransfected = list(df.loc[df['gate_name'] == 'And2Untransfected']['count'])[0]
     #this is a contingency for blank samples
     if neg_cntrl[0] == "None" and double_positives + green + red == 0:
@@ -451,7 +451,7 @@ def FETCH_analysis(inputlist):
         else:
             grn_ch_name = '1-A'
         x_ax_index = [chn for chn in other_chans if grn_ch_name in chn][0]
-        x_chan_name = sample.channels.loc[sample.channels['pnn'].str.contains(grn_ch_name)]['pns']
+        x_chan_name = list(sample.channels.loc[sample.channels['pnn'].str.contains(grn_ch_name)]['pns'])[0]
         green_loc = sample.channels.loc[sample.channels['pnn'].str.contains(grn_ch_name)].index[0]
         other_chans = [chn for chn in other_chans if grn_ch_name not in chn]
         arr4 = sample.get_channel_events(green_loc, source='raw', subsample=False) #1-A or FITC-A(Emerald)
@@ -525,33 +525,34 @@ def FETCH_analysis(inputlist):
     ell_coord, el_cx, el_cy, el_w, el_h, el_angle = fitEllipse(best_seg[:,0],best_seg[:,1])
     vertices1 = np.round(ell_coord, 0) 
     if not leg_g1: #Keep the definition of vertices1 only if replicating old data
-        # Step 1: Filter points whose y values are within 100 of the target value
-        filtered_points = X[np.abs(X[:, 0] - min(vertices1[:, 0])) <= 100]
+        # Step 1: Filter points whose y values are within 1000 of the target value
+        filtered_points = X[np.abs(X[:, 1] - min(vertices1[:, 1])) <= 1000]
 
         # # Step 2: Sort the filtered points based on x values
-        sorted_points = filtered_points[np.argsort(filtered_points[:, 1])]
+        sorted_points = filtered_points[np.argsort(filtered_points[:, 0])]
 
         # # Step 3: Select the point with the smallest x value from the sorted array
         left_low = sorted_points[0]
-        left_low = [left_low[1], left_low[0]]
 
         # # Step 4: Filter points whose y values are at least 10 more than the left_low's
-        filtered_points2 = X[(X[:, 0] > (left_low[1] + 10)) & (X[:, 1] > left_low[0])]
+        filtered_points2 = X[(X[:, 1] > (left_low[1] + 10)) & (X[:, 0] > left_low[0])]
 
         # # Step5: get the left_mid point to get the slope of the left bound
-        left_mid = filtered_points2[np.argsort(filtered_points2[:, 1])][0]
-        left_mid = [left_mid[1], left_mid[0]]
+        left_mid = filtered_points2[np.argsort(filtered_points2[:, 0])][0]
+        # left_mid = [left_mid[1], left_mid[0]]
         slope = (left_mid[1] - left_low[1]) / (left_mid[0] - left_low[0])
         y_intercept = left_low[1] - slope * left_low[0]
-        top_left = [(max(X[:, 0]) - 10 - y_intercept) / slope, max(X[:, 0]) -10]
-        right_top = [max(X[:, 1]) -10, max(X[:, 0]) -10]
+        top_left = [(max(X[:, 1]) - 10 - y_intercept) / slope, max(X[:, 1]) -10]
+        right_top = [max(X[:, 0]) -10, max(X[:, 1]) -10]
 
         # #Step 6: get the line parallel to the ellipse's angle and perpendicular to its second principal component to define left bound
         rad90 = np.radians(90)
+        if el_angle < 0:
+            el_angle = el_angle + 90
         ell_side_point = [el_cx + el_h/2*np.sin(np.radians(el_angle))/np.sin(rad90), el_cy - el_h/2*np.sin(np.radians(90 - el_angle))/np.sin(rad90)]
         slope_right = np.tan(np.radians(el_angle))
         y_intercept_right = ell_side_point[1] - slope_right * ell_side_point[0]
-        mid_right = [max(X[:, 1]) -10, slope_right*(max(X[:, 1]) -10) + y_intercept_right]
+        mid_right = [max(X[:, 0]) -10, slope_right*(max(X[:, 0]) -10) + y_intercept_right]
         low_right = [(left_low[1] - y_intercept_right)/slope_right, left_low[1]] 
         vertices1 = np.round([left_low, top_left, right_top, mid_right, low_right], 0)
 
