@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 from matplotlib.pyplot import figure
 import scipy
 import warnings
+import random
 
 def _centered(arr, newsize):
     # Return the center newsize portion of the array.
@@ -64,9 +65,9 @@ def parse_arguments():
         help="This script expects fcs files to be formatted as 'FC114_A1_A01_001.fcs'; if just a few files are not formatted like that, pass them as arguments in this function to avoid errors; otherwise edit summarize function too parse your filenames correctly", nargs='*')
 
     ap.add_argument(
-        "-l", "--legacy_gate1",
+        "-l", "--legacy_analysis",
         default="False",
-        help ="An optional argument that sets a more narrow first gate for replicability of past analysis",
+        help ="An optional argument that sets a more narrow first gate and quantile cutoff in the last gate for replicability of past analysis",
         type=str )
     
     ap.add_argument(
@@ -267,14 +268,22 @@ def bestBandwidth(data, minBandwidth = 0.1, maxBandwidth = 2, nb_bandwidths = 30
 
 
 #possibly for defining the last gate
-def z(samplename, Z, a, vertices1, vertices2, dest, sample, fluorophore1, fluorophore2, channame1, channame2, neg_cntrl):
+def z(samplename, Z, a, vertices1, vertices2, dest, sample, fluorophore1, fluorophore2, channame1, channame2, neg_cntrl, leg_g1):
     fluorophores = fluorophore1 + '_' + fluorophore2
     filename = join(dest, 'gates.xml')
     d = Z[a]
+
+    #Take a pseudorandom subsample of d if it is > 10000 points:
+    # if d.shape[0] > 10000:
+    #     random.seed(42)
+    #     print(d.shape)
+    #     rand_idx = random.sample(range(d.shape[0]), k = 10000)
+    #     d = d[rand_idx, :]
+
     if len(d) == 0:
         warnings.warn("No sample for last gate")
         return [samplename, 0, None, 0, []]
-    new_Z = np.array([Z[a][:, 0] + abs(min(Z[a][:, 0])) + 1, Z[a][:, 1] + abs(min(Z[a][:, 1])) + 1])
+    new_Z = np.array([d[:, 0] + abs(min(d[:, 0])) + 1, d[:, 1] + abs(min(d[:, 1])) + 1])
     new_Z= new_Z.T
     Z_log = np.log(new_Z) 
     try:
@@ -282,6 +291,7 @@ def z(samplename, Z, a, vertices1, vertices2, dest, sample, fluorophore1, fluoro
     except ValueError:
         warnings.warn("Can't make kde")
         return [samplename, 0, None, 0, []]
+
     max_area = 0
     best_top_point = None
     best_right_point = None
@@ -296,7 +306,6 @@ def z(samplename, Z, a, vertices1, vertices2, dest, sample, fluorophore1, fluoro
         if samplename.rsplit('.fcs') == neg_cntrl[0]:
             best_top_point = max(d[:, 1])
             best_right_point = max(d[:, 0])
-
         else:
             best_top_point, best_right_point = neg_cntrl[1]
     else:
@@ -307,10 +316,14 @@ def z(samplename, Z, a, vertices1, vertices2, dest, sample, fluorophore1, fluoro
                 mean_kde = np.mean(kde[grid])
                 top_point_log = max(seg[:,1])
                 right_point_log = max(seg[:,0])
-                top_point = np.exp(top_point_log) - abs(min(Z[a][:, 1])) - 1
-                right_point = np.exp(right_point_log) - abs(min(Z[a][:, 0])) - 1
-                transfected_cells_x = right_point >= 500
-                transfected_cells_y = top_point >= 500
+                top_point = np.exp(top_point_log) - abs(min(d[:, 1])) - 1
+                right_point = np.exp(right_point_log) - abs(min(d[:, 0])) - 1
+                if leg_g1:
+                    transfected_cells_x = right_point >= 500
+                    transfected_cells_y = top_point >= 500
+                else:
+                    transfected_cells_x = right_point >= 1100
+                    transfected_cells_y = top_point >= 1100
                 plt.plot(seg[:,0], seg[:,1], '.-')
                 if transfected_cells_x or transfected_cells_y:
                     continue 
@@ -326,8 +339,13 @@ def z(samplename, Z, a, vertices1, vertices2, dest, sample, fluorophore1, fluoro
                 largest_cand = cand
         h_plt = plt.hist(largest_cand[1], bins=100)
         bin_count = h_plt[0]
-        cutoff = h_plt[1]        
-        quantile_cutoff = np.quantile(cutoff, 0.60)
+        cutoff = h_plt[1]  
+        #this if/else is not currently used, but could be used to make the last gate more stringent
+        if leg_g1:
+            quantile_cutoff_val = 0.60
+        else:
+            quantile_cutoff_val = 0.30
+        quantile_cutoff = np.quantile(cutoff, quantile_cutoff_val)
         for cand in candidates:
             if np.mean(cand[1]) < quantile_cutoff:
                     continue
@@ -336,7 +354,21 @@ def z(samplename, Z, a, vertices1, vertices2, dest, sample, fluorophore1, fluoro
                     best_top_point = cand[2]
                     best_right_point = cand[3]
         
-        
+    #Plot kde lines on the log-transformed data for debugging:
+    plt.figure(num=None, figsize=(16, 16), dpi=80, facecolor='w', edgecolor='k')
+    for j in range(len(alls)):
+        for ii, seg in enumerate(alls[j]):
+            plt.plot(seg[:,0], seg[:,1], '.-')
+    plt.scatter(Z_log[:, 0], Z_log[:, 1], s=12.5)
+    if best_top_point != None:
+        best_log_top = np.log(best_top_point + abs(min(d[:, 1])) + 1)
+        best_log_right = np.log(best_right_point + abs(min(d[:, 0])) + 1)
+        plt.plot([min(Z_log[:, 0]), max(Z_log[:, 0])], [best_log_top, best_log_top], c='black')
+        plt.plot([best_log_right, best_log_right], [min(Z_log[:, 1]), max(Z_log[:, 1])], c='black')
+    plt.savefig(join(dest, channame1 + '_' + channame2 + '_debug_third_gate.pdf'), format='pdf', bbox_inches='tight')            
+    plt.cla()
+    plt.clf()
+
     boundaries = [best_right_point, best_top_point]
     if len(sample.channels) == 7:
         gname = join(dest, fluorophores + '_gates.xml')
@@ -350,6 +382,7 @@ def z(samplename, Z, a, vertices1, vertices2, dest, sample, fluorophore1, fluoro
         else: 
             best_right_point, best_top_point = neg_cntrl[1]
             boundaries = [best_right_point, best_top_point]
+        samplename = samplename + "_" + channame1 + "_" + channame2
 
     gate_writer(vertices1, vertices2, boundaries, gname, channame1, channame2, fluorophore1, fluorophore2)
     g_strat = fk.parse_gating_xml(gname)    
@@ -376,10 +409,17 @@ def z(samplename, Z, a, vertices1, vertices2, dest, sample, fluorophore1, fluoro
     green = list(df.loc[df['gate_name'] == 'And5fluorophoreb']['count'])[0]
     red = list(df.loc[df['gate_name'] == 'And4fluorophorea']['count'])[0]
     untransfected = list(df.loc[df['gate_name'] == 'And2Untransfected']['count'])[0]
+
+    #for each sample, for each pair of colors in it, export a dataframe with fluorescence values for each cell in it
+    color_df = pd.DataFrame(columns = [channame2, channame1])
+    color_df[channame2] = x
+    color_df[channame1] = y
+    color_df.to_csv(join(dest,  channame1 + "_" + channame2 + ".csv"))
+
     #this is a contingency for blank samples
     if neg_cntrl[0] == "None" and double_positives + green + red == 0:
-        warnings.warn("Only untransfected cells found")
-        return [samplename, 0, None, 0, [untransfected, red, green, double_positives]]
+        print("Only untransfected cells found")
+        return [samplename, 0, None, 0, boundaries, [untransfected, red, green, double_positives]]
     #defining the FETCH  score
     try:
         FETCH_score = double_positives/(double_positives + green + red)
@@ -388,12 +428,12 @@ def z(samplename, Z, a, vertices1, vertices2, dest, sample, fluorophore1, fluoro
 
     #another contingency
     if  neg_cntrl[0] == "None" and (FETCH_score > 0.90 or untransfected/(double_positives + green + red + untransfected) > 0.90):
-        warnings.warn("FETCH score unreasonably high -- something went wrong")
-        return [samplename, 0, None, double_positives + green + red + untransfected, [untransfected, red, green, double_positives]]
+        print("FETCH score unreasonably high -- something went wrong")
+        return [samplename, 0, None, double_positives + green + red + untransfected, boundaries, [untransfected, red, green, double_positives]]
     try:
         r_g = red/green
     except ZeroDivisionError:
-        warnings.warn("Can't calculate the proportion of red to green: there is no green cells")
+        print("Can't calculate the proportion of red to green: there is no green cells")
         r_g = 0
     ax = plt.gca()
     minor = matplotlib.ticker.LogLocator(base = 10.0, subs = np.arange(1.0, 10.0) * 0.1, numticks = 10)
@@ -417,11 +457,12 @@ def z(samplename, Z, a, vertices1, vertices2, dest, sample, fluorophore1, fluoro
     ax.add_artist(txt4)
     ax.set_title("FETCH Score: " + str(FETCH_score))
     #look into the bbox, bounding box
-    plt.savefig(join(dest, fluorophores + '_double_positive_final.pdf'), format='pdf', bbox_inches='tight')
+    plt.savefig(join(dest, channame1 + '_' + channame2 + '_double_positive_final.pdf'), format='pdf', bbox_inches='tight')
     #clear axes and figure to plot next
     plt.cla()
     plt.clf()
     return [samplename, FETCH_score, r_g, double_positives + green + red + untransfected, boundaries, [untransfected, red, green, double_positives]]
+
 
  #Above, the helper files were added, Below here, the actual processing, central functions are listed
 def FETCH_analysis(inputlist):
@@ -476,6 +517,8 @@ def FETCH_analysis(inputlist):
 
     if fluor_chan_n == 3: # have 3 fluorescent channels
         third_loc = sample.channels.loc[sample.channels['pnn'].str.contains(other_chans[1])].index[0]
+        z_chan_name = list(sample.channels.loc[sample.channels['pnn'].str.contains(other_chans[1])]['pns'])[0]
+        z_ax_index = other_chans[1]
         arr6 = sample.get_channel_events(third_loc, source='raw', subsample=False) 
         Z_ea = np.stack((arr4, arr5), axis=1)
         Z_er = np.stack((arr4, arr6), axis=1)
@@ -527,22 +570,27 @@ def FETCH_analysis(inputlist):
     if not leg_g1: #Keep the definition of vertices1 only if replicating old data
         # Step 1: Filter points whose y values are within 1000 of the target value
         filtered_points = X[np.abs(X[:, 1] - min(vertices1[:, 1])) <= 1000]
-
+        thresh = 1000
+        while np.shape(filtered_points)[0] == 0:
+            thresh += 500
+            filtered_points = X[np.abs(X[:, 1] - min(vertices1[:, 1])) <= thresh]
+            
         # # Step 2: Sort the filtered points based on x values
         sorted_points = filtered_points[np.argsort(filtered_points[:, 0])]
 
         # # Step 3: Select the point with the smallest x value from the sorted array
         left_low = sorted_points[0]
 
-        # # Step 4: Filter points whose y values are at least 10 more than the left_low's
-        filtered_points2 = X[(X[:, 1] > (left_low[1] + 10)) & (X[:, 0] > left_low[0])]
+        # # # Step 4: Filter points whose y values are at least 10 more than the left_low's
+        # filtered_points2 = X[(X[:, 1] > (left_low[1] + 10)) & (X[:, 0] > left_low[0])]
 
-        # # Step5: get the left_mid point to get the slope of the left bound
-        left_mid = filtered_points2[np.argsort(filtered_points2[:, 0])][0]
-        # left_mid = [left_mid[1], left_mid[0]]
-        slope = (left_mid[1] - left_low[1]) / (left_mid[0] - left_low[0])
-        y_intercept = left_low[1] - slope * left_low[0]
-        top_left = [(max(X[:, 1]) - 10 - y_intercept) / slope, max(X[:, 1]) -10]
+        # # # Step5: get the left_mid point to get the slope of the left bound
+        # left_mid = filtered_points2[np.argsort(filtered_points2[:, 0])][0]
+        # # left_mid = [left_mid[1], left_mid[0]]
+        # slope = (left_mid[1] - left_low[1]) / (left_mid[0] - left_low[0])
+        # y_intercept = left_low[1] - slope * left_low[0]
+        # top_left = [(max(X[:, 1]) - 10 - y_intercept) / slope, max(X[:, 1]) -10]
+        top_left = [left_low[0], max(X[:, 1]) -10]
         right_top = [max(X[:, 0]) -10, max(X[:, 1]) -10]
 
         # #Step 6: get the line parallel to the ellipse's angle and perpendicular to its second principal component to define left bound
@@ -626,16 +674,17 @@ def FETCH_analysis(inputlist):
     c = Y[a]
     fluorescent_chan_names = list(sample.channels['pns'].unique())
     if fluor_chan_n == 2:
-        return z(samplename, Z, a, vertices1, vertices2, dest, sample, y_chan_name, x_chan_name, y_ax_index, x_ax_index, neg_cntrl)
+        return z(samplename, Z, a, vertices1, vertices2, dest, sample, y_chan_name, x_chan_name, y_ax_index, x_ax_index, [neg_cntrl[0], neg_cntrl[1][0]], leg_g1)
     elif len(sample.channels) == 7:
-        first = z(samplename, Z_ea, a, vertices1, vertices2, dest, sample, y_chan_name, x_chan_name, y_ax_index, x_ax_index, neg_cntrl)
-        second = z(samplename, Z_er, a, vertices1, vertices2, dest, sample, 'RFP670', 'Emerald', 'APC-A', 'FITC-A', neg_cntrl)
-        third = z(samplename, Z_ar, a, vertices1, vertices2, dest, sample, 'RFP670', 'mApple', 'APC-A', 'PE-A', neg_cntrl)
+        first = z(samplename, Z_ea, a, vertices1, vertices2, dest, sample, y_chan_name, x_chan_name, y_ax_index, x_ax_index, [neg_cntrl[0], neg_cntrl[1][0]], leg_g1)
+        second = z(samplename, Z_er, a, vertices1, vertices2, dest, sample, z_chan_name, x_chan_name, z_ax_index, x_ax_index, [neg_cntrl[0], neg_cntrl[1][1]], leg_g1)
+        third = z(samplename, Z_ar, a, vertices1, vertices2, dest, sample, z_chan_name, y_chan_name, z_ax_index, y_ax_index, [neg_cntrl[0], neg_cntrl[1][2]], leg_g1)
         return [first, second, third]
 
 
 def summarize(outputs, fcs_folder, project_name, skip_renaming):
     dataf = pd.DataFrame(outputs)
+    print(dataf)
     dataf = dataf.rename({0: "File", 1: "FETCH score", 2 : "r_g", 3:"n_tot", 4: "3rd_gate_coord", 5:"raw_counts"}, axis='columns')
     dataf['Dubious?'] = [False for i in range(dataf.shape[0])]
     dataf['FETCH score'] = dataf['FETCH score'].astype(float)
@@ -673,11 +722,13 @@ def summarize(outputs, fcs_folder, project_name, skip_renaming):
 
     dataf = dataf.set_index("File")
     dataf.to_csv(join(fcs_folder, project_name + ".csv"))
+
+
 #identify which folder contains our fcs files, etc.
 def main(args):
     fcs_folder = args.folder
     project_name = args.project
-    leg_g1 = not(args.legacy_gate1 == 'False') #for replicability of past analysis, add an optional argument that sets a more narrow first gate
+    leg_g1 = not(args.legacy_analysis == 'False') #for replicability of past analysis, add an optional argument that sets a more narrow first gate
     skip_renaming = args.skip_renaming
     if skip_renaming == '':
         skip_renaming = []
@@ -686,19 +737,32 @@ def main(args):
     plt.clf()
     plt.close()
     plt.style.use('default')
-    inpts = [[join(fcs_folder, samplename), samplename, join(fcs_folder, samplename.rsplit('.')[0]), leg_g1, [negative_control, [None, None]]] if (samplename != '.DS_Store' and not os.path.isdir(join(fcs_folder, samplename.rsplit('.')[0]))) else None for samplename in os.listdir(fcs_folder)]
+    inpts = [[join(fcs_folder, samplename), samplename, join(fcs_folder, samplename.rsplit('.')[0]), leg_g1, [negative_control, [[None, None], [None, None], [None, None]]]] if (samplename != '.DS_Store' and not os.path.isdir(join(fcs_folder, samplename.rsplit('.')[0]))) else None for samplename in os.listdir(fcs_folder)]
     inpts = list(filter(None, inpts))
     outstuff = []
     if negative_control != "None":
         for i_pos, el in enumerate(inpts):
             if el[1].rsplit('.fcs')[0] == negative_control:
                 neg_outpt = FETCH_analysis(inpts.pop(i_pos))
-                outstuff.append(neg_outpt)
-                inpts = [[el[0], el[1], el[2], el[3], [el[4], neg_outpt[4]]] for el in inpts]
+                if len(neg_outpt) == 3: #the three fluorescent channels condition
+                    first_res = neg_outpt[0][4]
+                    second_res = neg_outpt[1][4]
+                    third_res = neg_outpt[2][4]
+                    for subel in neg_outpt:
+                        outstuff.append(subel)
+                    inpts = [[el[0], el[1], el[2], el[3], [el[4], [first_res, second_res, third_res]]] for el in inpts]
+                else:
+                    outstuff.append(neg_outpt)
+                    inpts = [[el[0], el[1], el[2], el[3], [el[4], [neg_outpt[4], [None, None], [None, None]]]] for el in inpts]
                 break
     
     for inp in inpts:
-        outstuff.append(FETCH_analysis(inp))
+        res = FETCH_analysis(inp)
+        if len(res) == 3:
+            for subel in res:
+                outstuff.append(subel)
+        else:
+            outstuff.append(res)
     outputs = np.array(outstuff)
     #draws the aggregate plot figure and table comparing FETCH scores
     summarize(outputs, fcs_folder, project_name, skip_renaming)
