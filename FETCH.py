@@ -302,58 +302,74 @@ def z(samplename, Z, a, vertices1, vertices2, dest, sample, fluorophore1, fluoro
     kde = np.exp(kde_model.score_samples(xy.T))
     idx = kde.argsort()
     candidates = []
-    if neg_cntrl[0] != "None":
-        if samplename.rsplit('.fcs') == neg_cntrl[0]:
-            best_top_point = max(d[:, 1])
-            best_right_point = max(d[:, 0])
-        else:
-            best_top_point, best_right_point = neg_cntrl[1]
+
+    #These are variables for the negative control gating
+    nc_top_point = 0
+    nc_right_point = 0
+
+    if neg_cntrl[0] != "None" and samplename.rsplit('.fcs')[0] != neg_cntrl[0]:
+        best_top_point, best_right_point = neg_cntrl[1]
     else:
         for j in range(len(alls)):
             for ii, seg in enumerate(alls[j]):
-                p = Path(seg) # make a polygon
-                grid = p.contains_points(xy.T)
-                mean_kde = np.mean(kde[grid])
-                top_point_log = max(seg[:,1])
-                right_point_log = max(seg[:,0])
-                top_point = np.exp(top_point_log) - abs(min(d[:, 1])) - 1
-                right_point = np.exp(right_point_log) - abs(min(d[:, 0])) - 1
-                if leg_g1:
-                    transfected_cells_x = right_point >= 500
-                    transfected_cells_y = top_point >= 500
+
+                #To find the best points for negative control, identify the rightmost and topmost points on a contour
+                if neg_cntrl[0] != "None" and samplename.rsplit('.fcs')[0] == neg_cntrl[0]:
+                    if seg[0][0] == seg[-1][0] and seg[0][1] == seg[-1][1]:
+                        top_point_log = max(seg[:,1])
+                        right_point_log = max(seg[:,0])
+                        top_point = np.exp(top_point_log) - abs(min(d[:, 1])) - 1
+                        right_point = np.exp(right_point_log) - abs(min(d[:, 0])) - 1
+                        if top_point > nc_top_point:
+                            nc_top_point = top_point
+                        if right_point > nc_right_point:
+                            nc_right_point = right_point
                 else:
-                    transfected_cells_x = right_point >= 1100
-                    transfected_cells_y = top_point >= 1100
-                plt.plot(seg[:,0], seg[:,1], '.-')
-                if transfected_cells_x or transfected_cells_y:
-                    continue 
-                area = 0.5*np.abs(np.dot(seg[:,0],np.roll(seg[:,1],1))-np.dot(seg[:,1],np.roll(seg[:,0],1)))    
-                if area > max_area:
-                    candidates.append([area, kde[grid], top_point, right_point])
-        largest_cand = [0]
-        if len(candidates) == 0:
-            warnings.warn("Pipeline error on this file")
-            return [samplename, 0, None, 0]
-        for cand in candidates:
-            if cand[0] > largest_cand[0]:
-                largest_cand = cand
-        h_plt = plt.hist(largest_cand[1], bins=100)
-        bin_count = h_plt[0]
-        cutoff = h_plt[1]  
-        #this if/else is not currently used, but could be used to make the last gate more stringent
-        if leg_g1:
-            quantile_cutoff_val = 0.60
-        else:
-            quantile_cutoff_val = 0.30
-        quantile_cutoff = np.quantile(cutoff, quantile_cutoff_val)
-        for cand in candidates:
-            if np.mean(cand[1]) < quantile_cutoff:
-                    continue
-            if cand[0] > max_area:
-                    max_area = cand[0]
-                    best_top_point = cand[2]
-                    best_right_point = cand[3]
-        
+                    #The following applies to FETCH, isn't relevant for negative control
+                    p = Path(seg) # make a polygon
+                    grid = p.contains_points(xy.T)
+                    mean_kde = np.mean(kde[grid])
+                    top_point_log = max(seg[:,1])
+                    right_point_log = max(seg[:,0])
+                    top_point = np.exp(top_point_log) - abs(min(d[:, 1])) - 1
+                    right_point = np.exp(right_point_log) - abs(min(d[:, 0])) - 1
+                    if leg_g1:
+                        transfected_cells_x = right_point >= 500
+                        transfected_cells_y = top_point >= 500
+                    else:
+                        transfected_cells_x = right_point >= 1100
+                        transfected_cells_y = top_point >= 1100
+                    plt.plot(seg[:,0], seg[:,1], '.-')
+                    if transfected_cells_x or transfected_cells_y:
+                        continue 
+                    area = 0.5*np.abs(np.dot(seg[:,0],np.roll(seg[:,1],1))-np.dot(seg[:,1],np.roll(seg[:,0],1)))    
+                    if area > max_area:
+                        candidates.append([area, kde[grid], top_point, right_point])
+        if neg_cntrl[0] == "None":
+            largest_cand = [0]
+            if len(candidates) == 0:
+                warnings.warn("Pipeline error on this file")
+                return [samplename, 0, None, 0]
+            for cand in candidates:
+                if cand[0] > largest_cand[0]:
+                    largest_cand = cand
+            h_plt = plt.hist(largest_cand[1], bins=100)
+            bin_count = h_plt[0]
+            cutoff = h_plt[1]  
+            #this if/else is not currently used, but could be used to make the last gate more stringent
+            if leg_g1:
+                quantile_cutoff_val = 0.60
+            else:
+                quantile_cutoff_val = 0.30
+            quantile_cutoff = np.quantile(cutoff, quantile_cutoff_val)
+            for cand in candidates:
+                if np.mean(cand[1]) < quantile_cutoff:
+                        continue
+                if cand[0] > max_area:
+                        max_area = cand[0]
+                        best_top_point = cand[2]
+                        best_right_point = cand[3]
+    
     #Plot kde lines on the log-transformed data for debugging:
     plt.figure(num=None, figsize=(16, 16), dpi=80, facecolor='w', edgecolor='k')
     for j in range(len(alls)):
@@ -376,8 +392,8 @@ def z(samplename, Z, a, vertices1, vertices2, dest, sample, fluorophore1, fluoro
         gname = join(dest, 'gates.xml')
     if neg_cntrl[0] != "None":
         if neg_cntrl[0] == samplename.rsplit('.fcs')[0]:
-            best_right_point = max(d[:, 0]) + 10
-            best_top_point = max(d[:, 1]) + 10
+            best_top_point = nc_top_point
+            best_right_point = nc_right_point
             boundaries = [best_right_point, best_top_point]
         else: 
             best_right_point, best_top_point = neg_cntrl[1]
