@@ -282,7 +282,7 @@ def z(samplename, Z, a, vertices1, vertices2, dest, sample, fluorophore1, fluoro
 
     if len(d) == 0:
         warnings.warn("No sample for last gate")
-        return [samplename, 0, None, 0, []]
+        return [samplename, 0, None, 0, [0, 0], [0, 0, 0, 0]]
     new_Z = np.array([d[:, 0] + abs(min(d[:, 0])) + 1, d[:, 1] + abs(min(d[:, 1])) + 1])
     new_Z= new_Z.T
     Z_log = np.log(new_Z) 
@@ -290,7 +290,7 @@ def z(samplename, Z, a, vertices1, vertices2, dest, sample, fluorophore1, fluoro
         [alls, figure_centre, x, y] = make_kde(Z_log)
     except ValueError:
         warnings.warn("Can't make kde")
-        return [samplename, 0, None, 0, []]
+        return [samplename, 0, None, 0, [0, 0], [0, 0, 0, 0]]
 
     max_area = 0
     best_top_point = None
@@ -349,7 +349,7 @@ def z(samplename, Z, a, vertices1, vertices2, dest, sample, fluorophore1, fluoro
             largest_cand = [0]
             if len(candidates) == 0:
                 warnings.warn("Pipeline error on this file")
-                return [samplename, 0, None, 0]
+                return [samplename, 0, None, 0, [0, 0], [0, 0, 0, 0]]
             for cand in candidates:
                 if cand[0] > largest_cand[0]:
                     largest_cand = cand
