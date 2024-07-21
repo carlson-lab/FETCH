@@ -73,7 +73,19 @@ def parse_arguments():
     ap.add_argument(
         "-n", "--negative_control",
         default="None",
-        help ="An optional argument: draws the third gate against a known negative control instead of automatic gating",
+        help ="An optional argument: negative control file name w/o fcs; draws the third gate against a known negative control instead of automatic gating",
+        type=str )
+    
+    ap.add_argument(
+        "-pn", "--predefined_negative_control",
+        default="None",
+        help ="An optional argument: can specify x axis and y axis precise values to draw the third gate in the format e.g.: -pn 100,240",
+        type=str )
+    
+    ap.add_argument(
+        "-g", "--log_gate",
+        default="None",
+        help ="An optional argument: one uses log transform on the first gate for the unorthodox FETCH template",
         type=str )
     
     return ap.parse_args()
@@ -381,6 +393,8 @@ def z(samplename, Z, a, vertices1, vertices2, dest, sample, fluorophore1, fluoro
         best_log_right = np.log(best_right_point + abs(min(d[:, 0])) + 1)
         plt.plot([min(Z_log[:, 0]), max(Z_log[:, 0])], [best_log_top, best_log_top], c='black')
         plt.plot([best_log_right, best_log_right], [min(Z_log[:, 1]), max(Z_log[:, 1])], c='black')
+    print(channame1)
+    print(channame2)
     plt.savefig(join(dest, channame1 + '_' + channame2 + '_debug_third_gate.pdf'), format='pdf', bbox_inches='tight')            
     plt.cla()
     plt.clf()
@@ -414,6 +428,9 @@ def z(samplename, Z, a, vertices1, vertices2, dest, sample, fluorophore1, fluoro
     plt.scatter(x, y, c=kde, cmap = 'turbo', s=15)
     plt.yscale('symlog', linthresh=1000)
     plt.xscale('symlog', linthresh=1000)
+    # plt.scatter(new_Z[:, 0], new_Z[:, 1], c=kde, cmap = 'turbo', s=15)
+    # plt.yscale('log')
+    # plt.xscale('log')
     #these are gate lines; min, max are the range of point values; best points define position of the gate
     plt.plot([min(x), max(x)], [best_top_point, best_top_point], c='black')
     plt.plot([best_right_point, best_right_point], [min(y), max(y)], c='black')
@@ -483,7 +500,7 @@ def z(samplename, Z, a, vertices1, vertices2, dest, sample, fluorophore1, fluoro
  #Above, the helper files were added, Below here, the actual processing, central functions are listed
 def FETCH_analysis(inputlist):
     plt.close('all')
-    fcs_path, samplename, dest, leg_g1, neg_cntrl = inputlist
+    fcs_path, samplename, dest, leg_g1, neg_cntrl, log_gate = inputlist
     #make a directly for an FCS file and use flowkit to parse that, to get variable called sample
     os.mkdir(dest)
     plt.grid(visible=None)
@@ -522,14 +539,19 @@ def FETCH_analysis(inputlist):
 
     if x_chan_name == '':
         x_chan_name = x_ax_index
-    second_loc = sample.channels.loc[sample.channels['pnn'].str.contains(other_chans[0])].index[0]
-    y_ax_index = other_chans[0]
-    y_chan_name = list(sample.channels.loc[sample.channels['pnn'].str.contains(other_chans[0])]['pns'])[0]
-    if y_chan_name == '':
-        y_chan_name = y_ax_index
-    arr5 = sample.get_channel_events(second_loc, source='raw', subsample=False) #5-A(RFP670), PE-Texas Red-A(mCherry), PE-A (mApple), or any other color
-        
-    Z = np.stack((arr4, arr5), axis=1)
+    if len(other_chans) == 0: #If only got one fluorescent channel, use it as x and FSC-A as y
+        y_chan_name = 'FSC-A'
+        y_ax_index = 'FSC-A'
+        Z = np.stack((arr4, arr1), axis=1)
+    else:
+        second_loc = sample.channels.loc[sample.channels['pnn'].str.contains(other_chans[0])].index[0]
+        y_ax_index = other_chans[0]
+        y_chan_name = list(sample.channels.loc[sample.channels['pnn'].str.contains(other_chans[0])]['pns'])[0]
+        if y_chan_name == '':
+            y_chan_name = y_ax_index
+        arr5 = sample.get_channel_events(second_loc, source='raw', subsample=False) #5-A(RFP670), PE-Texas Red-A(mCherry), PE-A (mApple), or any other color
+            
+        Z = np.stack((arr4, arr5), axis=1)
 
     if fluor_chan_n == 3: # have 3 fluorescent channels
         third_loc = sample.channels.loc[sample.channels['pnn'].str.contains(other_chans[1])].index[0]
@@ -542,7 +564,13 @@ def FETCH_analysis(inputlist):
     elif fluor_chan_n > 3:
         raise Exception("Something is wrong with your channel number")
         #arr = array, plot.. x = 1st gate and y = 2nd gate
-    X = np.stack((arr2, arr1), axis=1)
+
+    if log_gate:
+        alter_X = np.array([arr2 + abs(min(arr2)) + 1, arr1 + abs(min(arr1)) + 1])
+        alter_X = alter_X.T
+        X = np.log(alter_X) 
+    else:
+        X = np.stack((arr2, arr1), axis=1)
     Y = np.stack((arr1, arr3), axis=1)     
     #this loop goes through the contours of the first gate 
     [alls, figure_centre, x, y] = make_kde(X)
@@ -573,6 +601,7 @@ def FETCH_analysis(inputlist):
                 point_num = num_points           
     if best_seg is None or point_num < min_points:
         if len(seg_list) == 0:
+            print('No cells in the first gate')
             return [samplename, 0, None, 0]
         newbest = None
         smallest_area = np.inf
@@ -581,6 +610,15 @@ def FETCH_analysis(inputlist):
                 smallest_area = item[1]
                 best_seg = alls[item[0]][item[2]]
     #fitting an elipse to our identified best fit contour
+    if log_gate:
+        return_X = np.array([np.exp(X[:, 0]), np.exp(X[:, 1])])
+        return_X = return_X.T
+        X = np.array([return_X[:, 0] - abs(min(arr2)) - 1, return_X[:, 1] - abs(min(arr1)) - 1])
+        X = X.T
+        return_best_seg = np.array([np.exp(best_seg[:, 0]), np.exp(best_seg[:, 1])])
+        return_best_seg = return_best_seg.T
+        best_seg = np.array([return_best_seg[:, 0] - abs(min(arr2)) - 1, return_best_seg[:, 1] - abs(min(arr1)) - 1])
+        best_seg = best_seg.T
     ell_coord, el_cx, el_cy, el_w, el_h, el_angle = fitEllipse(best_seg[:,0],best_seg[:,1])
     vertices1 = np.round(ell_coord, 0) 
     if not leg_g1: #Keep the definition of vertices1 only if replicating old data
@@ -630,6 +668,7 @@ def FETCH_analysis(inputlist):
     b = Y[a]
     #len= length; a contingency
     if len(b) == 0:
+        print('No cells in the second gate')
         return [samplename, 0, None, 0]
     plt.scatter(X[:, 0], X[:, 1], c=a, s=12.5)
     ax = plt.gca()
@@ -689,7 +728,7 @@ def FETCH_analysis(inputlist):
     a = gs_results.get_gate_membership('And1')
     c = Y[a]
     fluorescent_chan_names = list(sample.channels['pns'].unique())
-    if fluor_chan_n == 2:
+    if fluor_chan_n == 1 or fluor_chan_n == 2:
         return z(samplename, Z, a, vertices1, vertices2, dest, sample, y_chan_name, x_chan_name, y_ax_index, x_ax_index, [neg_cntrl[0], neg_cntrl[1][0]], leg_g1)
     elif len(sample.channels) == 7:
         first = z(samplename, Z_ea, a, vertices1, vertices2, dest, sample, y_chan_name, x_chan_name, y_ax_index, x_ax_index, [neg_cntrl[0], neg_cntrl[1][0]], leg_g1)
@@ -749,11 +788,21 @@ def main(args):
     if skip_renaming == '':
         skip_renaming = []
     negative_control = args.negative_control
+    predefined_negative_control = args.predefined_negative_control
+    log_gate = args.log_gate
+    if log_gate != 'None':
+        log_gate = True
+    else:
+        log_gate = False
     plt.cla()
     plt.clf()
     plt.close()
     plt.style.use('default')
-    inpts = [[join(fcs_folder, samplename), samplename, join(fcs_folder, samplename.rsplit('.')[0]), leg_g1, [negative_control, [[None, None], [None, None], [None, None]]]] if (samplename != '.DS_Store' and not os.path.isdir(join(fcs_folder, samplename.rsplit('.')[0]))) else None for samplename in os.listdir(fcs_folder)]
+    inpts = [[join(fcs_folder, samplename), samplename, 
+              join(fcs_folder, samplename.rsplit('.')[0]), leg_g1, 
+              [negative_control, [[None, None], [None, None], [None, None]]], log_gate] if 
+              (samplename != '.DS_Store' and not os.path.isdir(join(fcs_folder, samplename.rsplit('.')[0]))) 
+              else None for samplename in os.listdir(fcs_folder)]
     inpts = list(filter(None, inpts))
     outstuff = []
     if negative_control != "None":
@@ -766,11 +815,14 @@ def main(args):
                     third_res = neg_outpt[2][4]
                     for subel in neg_outpt:
                         outstuff.append(subel)
-                    inpts = [[el[0], el[1], el[2], el[3], [el[4], [first_res, second_res, third_res]]] for el in inpts]
+                    inpts = [[el[0], el[1], el[2], el[3], [el[4], [first_res, second_res, third_res]], log_gate] for el in inpts]
                 else:
                     outstuff.append(neg_outpt)
-                    inpts = [[el[0], el[1], el[2], el[3], [el[4], [neg_outpt[4], [None, None], [None, None]]]] for el in inpts]
+                    inpts = [[el[0], el[1], el[2], el[3], [el[4], [neg_outpt[4], [None, None], [None, None]]], log_gate] for el in inpts]
                 break
+    if predefined_negative_control != "None":
+        x_ax_thresh, y_ax_thresh = [int(val) for val in predefined_negative_control.split(',')]
+        inpts = [[el[0], el[1], el[2], el[3], [el[4], [[x_ax_thresh, y_ax_thresh], [None, None], [None, None]]], log_gate] for el in inpts]
     
     for inp in inpts:
         res = FETCH_analysis(inp)
@@ -779,9 +831,8 @@ def main(args):
                 outstuff.append(subel)
         else:
             outstuff.append(res)
-    outputs = np.array(outstuff)
     #draws the aggregate plot figure and table comparing FETCH scores
-    summarize(outputs, fcs_folder, project_name, skip_renaming)
+    summarize(outstuff, fcs_folder, project_name, skip_renaming)
 #this is where the code actually starts; runs 'main', above
 if __name__ == '__main__':
     args = parse_arguments()

@@ -16,3 +16,4 @@ Pipeline for processing flow cytometry .fcs files to get FETCH score
 - `-s` or `--skip_renaming`: This script expects fcs files to be formatted as 'FC114_A1_A01_001.fcs'; if just a few files are not formatted like that, pass them as arguments in this function to avoid errors; otherwise edit summarize function too parse your filenames correctly
 - `-l` or `--legacy_analysis`: An optional paramenter. When used with "True" argument, the script will assume FETCH analysis pipeline as used in https://doi.org/10.1101/2021.06.07.447352
 - `-n` or `--negative_control`: An optional parameter. When used, supply an argument with a file name (without ".fcs" extension) to define the third gate boundaries. Uses kde contours to identify the negative population without extreme outliers, and then applies the same gate to all other samples in the folder f  
+- `-g` or `--log_gate`: An optional argument: one uses log transform on the first gate for the unorthodox FETCH template
